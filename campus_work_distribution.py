@@ -97,11 +97,12 @@ gdf = load_buildings()
 # ─── Normalize FAC_ID to match GeoJSON ───────────────────────────────────────
 
 manual_map = {
-    "COC":                "COLLEGE OF COMPUTING",
+    "COC": "COLLEGE OF COMPUTING",
     # add any other one-offs here…
 }
 
-valid_names = set(gdf["FAC_ID"])
+# Only keep real strings for fuzzy matching
+valid_names = {name for name in gdf["FAC_ID"].unique() if isinstance(name, str)}
 
 def standardize_fac_id(fid):
     if not isinstance(fid, str):
@@ -111,6 +112,7 @@ def standardize_fac_id(fid):
         return manual_map[key]
     if key in valid_names:
         return key
+    # now safe to fuzzy-match, because valid_names contains only strings
     matches = get_close_matches(key, valid_names, n=1, cutoff=0.7)
     return matches[0] if matches else key
 
@@ -162,7 +164,8 @@ def build_tooltip_html(feature):
         col = CRAFT_COLORS.get(c, "#CCCCCC")
         swatch = (
             f"<span style='display:inline-block;"
-            f"width:12px;height:12px;background:{col};"
+            f"width:12px;height:12px;"
+            f"background:{col};"
             f"margin-right:4px;'></span>"
         )
         lines.append(f"{swatch}{c}: {p}%")
@@ -198,11 +201,15 @@ layer = pdk.Layer(
 deck = pdk.Deck(
     layers=[layer],
     initial_view_state=view_state,
-    tooltip={"html": "{tooltip_html}", "style": {"backgroundColor": "rgba(0,0,0,0.8)", "color": "white"}}
+    tooltip={
+        "html": "{tooltip_html}",
+        "style": {"backgroundColor": "rgba(0,0,0,0.8)", "color": "white"}
+    }
 )
 
 st.write("Hover over a building to see its pie-chart and legend.")
 st.pydeck_chart(deck)
+
 
 
 
