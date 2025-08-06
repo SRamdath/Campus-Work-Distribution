@@ -6,13 +6,13 @@ import matplotlib.pyplot as plt
 import matplotlib as mpl
 from io import BytesIO
 import base64
+from difflib import get_close_matches
 
-# Configuration 
+# ─── Configuration ──────────────────────────────────────────────────────────
 
 st.set_page_config(page_title="Map of Campus and building work-orders", layout="wide")
 st.title("Map of Campus and building work-orders")
 
-# consistent colors for each Craft
 CRAFT_COLORS = {
     "HVAC":              "#1f77b4",
     "ELECTRIC":          "#ff7f0e",
@@ -22,7 +22,6 @@ CRAFT_COLORS = {
     "PAINT":             "#8c564b",
     "ADMINISTRATIVE":    "#e377c2",
     "PROJECT MANAGEMENT":"#7f7f7f",
-    # add any others here
 }
 
 SEASON_MONTHS = {
@@ -34,42 +33,36 @@ SEASON_MONTHS = {
 PCT_ON_SLICE = 5.0
 
 
-# Sidebar Filters 
+# ─── Sidebar Filters ────────────────────────────────────────────────────────
 
 st.sidebar.header("🔍 Filters")
 
 @st.cache_data
 def load_years():
-    tmp = pd.read_csv(
-        "DF_WO_GaTech.csv",
-        parse_dates=["WORKDATE"],
-        usecols=["WORKDATE"]
-    )
-    yrs = tmp["WORKDATE"].dt.year
+    df = pd.read_csv("DF_WO_GaTech.csv", parse_dates=["WORKDATE"], usecols=["WORKDATE"])
+    yrs = df["WORKDATE"].dt.year
     return int(yrs.min()), int(yrs.max())
 
 min_year, max_year = load_years()
-selected_years = st.sidebar.slider(
-    "Year range", min_year, max_year, (min_year, max_year)
-)
+years_sel = st.sidebar.slider("Year range", min_year, max_year, (min_year, max_year))
 
 filter_months = st.sidebar.checkbox("Filter by month-range", False)
 if filter_months:
     tmp = pd.read_csv("DF_WO_GaTech.csv", parse_dates=["WORKDATE"], usecols=["WORKDATE"])
     mn, mx = tmp["WORKDATE"].dt.month.min(), tmp["WORKDATE"].dt.month.max()
-    selected_months = st.sidebar.slider("Month range", int(mn), int(mx), (int(mn), int(mx)))
+    months_sel = st.sidebar.slider("Month range", int(mn), int(mx), (int(mn), int(mx)))
 else:
-    selected_months = (None, None)
+    months_sel = (None, None)
 
 filter_season = st.sidebar.checkbox("Filter by season", False)
 if filter_season:
-    selected_season = st.sidebar.selectbox("Season", list(SEASON_MONTHS))
-    season_months = SEASON_MONTHS[selected_season]
+    season_sel = st.sidebar.selectbox("Season", list(SEASON_MONTHS))
+    season_months = SEASON_MONTHS[season_sel]
 else:
     season_months = None
 
 
-# Load & Filter Work-Orders 
+# ─── Load & Filter Work-Orders ──────────────────────────────────────────────
 
 @st.cache_data
 def load_and_filter_orders(years, months, season):
@@ -84,41 +77,65 @@ def load_and_filter_orders(years, months, season):
     if season is not None:
         mask &= df["month"].isin(season)
 
-    return df.loc[mask]
+    return df.loc[mask].copy()
 
-df = load_and_filter_orders(selected_years, selected_months, season_months)
+df = load_and_filter_orders(years_sel, months_sel, season_months)
 
 
-# Load Building Footprints
+# ─── Load Building Footprints ───────────────────────────────────────────────
 
 @st.cache_data
 def load_buildings():
     gdf = gpd.read_file("campus_buildings.geojson")
-    gdf["Sheet3__Common_Name"] = (
-        gdf["Sheet3__Common_Name"].str.upper().str.strip()
-    )
+    # normalize names for matching
+    gdf["FAC_ID"] = gdf["Sheet3__Common_Name"].str.upper().str.strip()
     return gdf
 
 gdf = load_buildings()
 
 
-# Aggregate by Craft 
+# ─── Fix naming mismatches ───────────────────────────────────────────────────
 
-grouped = (
-    df.groupby("FAC_ID")["CRAFT"]
-      .value_counts()
-      .unstack(fill_value=0)
-)
+# Manual overrides for known one-offs
+manual_map = {
+    "COC":                "COLLEGE OF COMPUTING",
+    "ADMINISTRATION":     "ADMINISTRATION BLDG",
+    "BRITTAIN DIN-GT":    "BRITTAIN DINING HALL",
+    "BRADLEY DINING":     "BRADLEY BLDG",
+    "BOGGS CHEM":         "BOGGS CHEMISTRY",
+    "ARMY ROTC OFFIC":    "ARMY OFFICE",
+    # …add any others you’ve spotted…
+}
+
+valid_names = set(gdf["FAC_ID"])
+
+def standardize_fac_id(fid: str) -> str:
+    # 1) manual override
+    if fid in manual_map:
+        return manual_map[fid]
+    # 2) exact match
+    if fid in valid_names:
+        return fid
+    # 3) fuzzy match at 70%+
+    matches = get_close_matches(fid, valid_names, n=1, cutoff=0.7)
+    if matches:
+        return matches[0]
+    # 4) leave as-is (will show “No work-order data”)
+    return fid
+
+df["FAC_ID"] = df["FAC_ID"].apply(standardize_fac_id)
 
 
-# Pie‐Chart Renderer 
+# ─── Aggregate by Craft ─────────────────────────────────────────────────────
 
-def make_pie_datauri(counts):
+craft_counts = df.groupby("FAC_ID")["CRAFT"].value_counts().unstack(fill_value=0)
+
+
+# ─── Pie‐Chart Renderer ──────────────────────────────────────────────────────
+
+def make_pie_datauri(counts: pd.Series) -> str:
     fig, ax = plt.subplots(figsize=(2, 2))
-
-    # pick colors in the same order as counts.index
     colors = [CRAFT_COLORS.get(c, "#CCCCCC") for c in counts.index]
-
     autopct = lambda p: f"{p:.0f}%" if p >= PCT_ON_SLICE else ""
     ax.pie(
         counts,
@@ -129,68 +146,52 @@ def make_pie_datauri(counts):
         wedgeprops={"edgecolor": "white"},
     )
     ax.axis("equal")
-
     buf = BytesIO()
     fig.savefig(buf, format="png", bbox_inches="tight", transparent=True)
     plt.close(fig)
     buf.seek(0)
-    data = base64.b64encode(buf.read()).decode()
-    return f"data:image/png;base64,{data}"
+    return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
 
 
-#  Tooltip HTML 
+# ─── Tooltip HTML ───────────────────────────────────────────────────────────
 
-def build_tooltip_html(row):
-    name = row["Sheet3__Common_Name"]
-    if name in grouped.index:
-        raw    = grouped.loc[name]
-        counts = raw[raw > 0]
-        pct    = counts.div(counts.sum()) * 100
-        uri    = make_pie_datauri(counts)
+def build_tooltip_html(feature) -> str:
+    fid = feature["properties"]["FAC_ID"]
+    counts = craft_counts.get(fid, pd.Series(dtype=int))
+    counts = counts[counts > 0]
 
-        lines = []
-        for craft, p in zip(counts.index, pct):
-            col = CRAFT_COLORS.get(craft, "#CCCCCC")
-            swatch = (
-                f"<span style='display:inline-block;"
-                f"width:12px; height:12px; background:{col};"
-                f"margin-right:4px; vertical-align:middle'></span>"
-            )
-            lines.append(f"{swatch}{craft}: {p:.1f}%")
+    if counts.empty:
+        return f"<div><strong>{fid}</strong><br>No work-order data</div>"
 
-        legend = "<br>".join(lines)
+    pct = (counts / counts.sum() * 100).round(1)
+    uri = make_pie_datauri(counts)
 
-        return (
-            "<div style='text-align:center;'>"
-              f"<strong>{name}</strong><br>"
-              f"<img src='{uri}' width='120px'><br>"
-              "<div style='text-align:left; font-size:0.9em; "
-                         "column-count:2; column-gap:12px; "
-                         "margin-top:4px; overscroll-behavior:contain;'>"
-                f"{legend}"
-              "</div>"
-            "</div>"
+    lines = []
+    for c, p in zip(counts.index, pct):
+        col = CRAFT_COLORS.get(c, "#CCCCCC")
+        swatch = (
+            f"<span style='display:inline-block;"
+            f"width:12px;height:12px;background:{col};"
+            f"margin-right:4px;'></span>"
         )
-    else:
-        return (
-            "<div style='text-align:center;'>"
-              f"<strong>{name}</strong><br>"
-              "No work-order data"
-            "</div>"
-        )
+        lines.append(f"{swatch}{c}: {p}%")
 
-gdf["tooltip_html"] = gdf.apply(build_tooltip_html, axis=1)
+    legend = "<br>".join(lines)
+    return (
+        "<div style='text-align:center;'>"
+        f"<strong>{fid}</strong><br>"
+        f"<img src='{uri}' width='120px'><br>"
+        f"<div style='column-count:2; column-gap:8px; "
+        f"font-size:0.9em; overscroll-behavior:contain;'>{legend}</div>"
+        "</div>"
+    )
+
+gdf["tooltip_html"] = gdf.apply(lambda r: build_tooltip_html(r), axis=1)
 
 
-# Render Map 
+# ─── Render Map ─────────────────────────────────────────────────────────────
 
-MAP_CENTER = [33.7756, -84.3963]
-view_state = pdk.ViewState(
-    latitude=MAP_CENTER[0],
-    longitude=MAP_CENTER[1],
-    zoom=16,
-    pitch=0
-)
+view_state = pdk.ViewState(latitude=33.7756, longitude=-84.3963, zoom=16, pitch=0)
 
 layer = pdk.Layer(
     "GeoJsonLayer",
@@ -198,7 +199,6 @@ layer = pdk.Layer(
     pickable=True,
     stroked=True,
     filled=True,
-    extruded=False,
     get_fill_color=[50, 100, 200, 80],
     get_line_color=[255, 255, 255, 200],
 )
@@ -206,10 +206,7 @@ layer = pdk.Layer(
 deck = pdk.Deck(
     layers=[layer],
     initial_view_state=view_state,
-    tooltip={
-        "html": "{tooltip_html}",
-        "style": {"backgroundColor": "rgba(0,0,0,0.8)", "color": "white"}
-    }
+    tooltip={"html": "{tooltip_html}", "style": {"backgroundColor": "rgba(0,0,0,0.8)", "color": "white"}}
 )
 
 st.write("Hover over a building to see its pie-chart and legend.")
