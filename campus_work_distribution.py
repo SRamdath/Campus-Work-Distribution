@@ -30,6 +30,7 @@ SEASON_MONTHS = {
     "Summer": [6, 7, 8],
     "Fall":   [9, 10, 11],
 }
+
 PCT_ON_SLICE = 5.0
 
 
@@ -39,8 +40,8 @@ st.sidebar.header("🔍 Filters")
 
 @st.cache_data
 def load_years():
-    df = pd.read_csv("DF_WO_GaTech.csv", parse_dates=["WORKDATE"], usecols=["WORKDATE"])
-    yrs = df["WORKDATE"].dt.year
+    tmp = pd.read_csv("DF_WO_GaTech.csv", parse_dates=["WORKDATE"], usecols=["WORKDATE"])
+    yrs = tmp["WORKDATE"].dt.year
     return int(yrs.min()), int(yrs.max())
 
 min_year, max_year = load_years()
@@ -48,8 +49,8 @@ years_sel = st.sidebar.slider("Year range", min_year, max_year, (min_year, max_y
 
 filter_months = st.sidebar.checkbox("Filter by month-range", False)
 if filter_months:
-    tmp = pd.read_csv("DF_WO_GaTech.csv", parse_dates=["WORKDATE"], usecols=["WORKDATE"])
-    mn, mx = tmp["WORKDATE"].dt.month.min(), tmp["WORKDATE"].dt.month.max()
+    tmp2 = pd.read_csv("DF_WO_GaTech.csv", parse_dates=["WORKDATE"], usecols=["WORKDATE"])
+    mn, mx = tmp2["WORKDATE"].dt.month.min(), tmp2["WORKDATE"].dt.month.max()
     months_sel = st.sidebar.slider("Month range", int(mn), int(mx), (int(mn), int(mx)))
 else:
     months_sel = (None, None)
@@ -87,41 +88,31 @@ df = load_and_filter_orders(years_sel, months_sel, season_months)
 @st.cache_data
 def load_buildings():
     gdf = gpd.read_file("campus_buildings.geojson")
-    # normalize names for matching
     gdf["FAC_ID"] = gdf["Sheet3__Common_Name"].str.upper().str.strip()
     return gdf
 
 gdf = load_buildings()
 
 
-# ─── Fix naming mismatches ───────────────────────────────────────────────────
+# ─── Normalize FAC_ID to match GeoJSON ───────────────────────────────────────
 
-# Manual overrides for known one-offs
 manual_map = {
     "COC":                "COLLEGE OF COMPUTING",
-    "ADMINISTRATION":     "ADMINISTRATION BLDG",
-    "BRITTAIN DIN-GT":    "BRITTAIN DINING HALL",
-    "BRADLEY DINING":     "BRADLEY BLDG",
-    "BOGGS CHEM":         "BOGGS CHEMISTRY",
-    "ARMY ROTC OFFIC":    "ARMY OFFICE",
-    # …add any others you’ve spotted…
+    # add any other one-offs here…
 }
 
 valid_names = set(gdf["FAC_ID"])
 
-def standardize_fac_id(fid: str) -> str:
-    # 1) manual override
-    if fid in manual_map:
-        return manual_map[fid]
-    # 2) exact match
-    if fid in valid_names:
+def standardize_fac_id(fid):
+    if not isinstance(fid, str):
         return fid
-    # 3) fuzzy match at 70%+
-    matches = get_close_matches(fid, valid_names, n=1, cutoff=0.7)
-    if matches:
-        return matches[0]
-    # 4) leave as-is (will show “No work-order data”)
-    return fid
+    key = fid.strip().upper()
+    if key in manual_map:
+        return manual_map[key]
+    if key in valid_names:
+        return key
+    matches = get_close_matches(key, valid_names, n=1, cutoff=0.7)
+    return matches[0] if matches else key
 
 df["FAC_ID"] = df["FAC_ID"].apply(standardize_fac_id)
 
@@ -133,7 +124,7 @@ craft_counts = df.groupby("FAC_ID")["CRAFT"].value_counts().unstack(fill_value=0
 
 # ─── Pie‐Chart Renderer ──────────────────────────────────────────────────────
 
-def make_pie_datauri(counts: pd.Series) -> str:
+def make_pie_datauri(counts):
     fig, ax = plt.subplots(figsize=(2, 2))
     colors = [CRAFT_COLORS.get(c, "#CCCCCC") for c in counts.index]
     autopct = lambda p: f"{p:.0f}%" if p >= PCT_ON_SLICE else ""
@@ -155,7 +146,7 @@ def make_pie_datauri(counts: pd.Series) -> str:
 
 # ─── Tooltip HTML ───────────────────────────────────────────────────────────
 
-def build_tooltip_html(feature) -> str:
+def build_tooltip_html(feature):
     fid = feature["properties"]["FAC_ID"]
     counts = craft_counts.get(fid, pd.Series(dtype=int))
     counts = counts[counts > 0]
@@ -199,6 +190,7 @@ layer = pdk.Layer(
     pickable=True,
     stroked=True,
     filled=True,
+    extruded=False,
     get_fill_color=[50, 100, 200, 80],
     get_line_color=[255, 255, 255, 200],
 )
