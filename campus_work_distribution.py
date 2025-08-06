@@ -7,7 +7,7 @@ import matplotlib as mpl
 from io import BytesIO
 import base64
 
-# ─── Configuration ──────────────────────────────────────────────────────────
+# Configuration 
 
 st.set_page_config(page_title="Map of Campus and building work-orders", layout="wide")
 st.title("Map of Campus and building work-orders")
@@ -22,7 +22,7 @@ CRAFT_COLORS = {
     "PAINT":             "#8c564b",
     "ADMINISTRATIVE":    "#e377c2",
     "PROJECT MANAGEMENT":"#7f7f7f",
-    # add any others here…
+    # add any others here
 }
 
 SEASON_MONTHS = {
@@ -34,7 +34,7 @@ SEASON_MONTHS = {
 PCT_ON_SLICE = 5.0
 
 
-# ─── Sidebar Filters ────────────────────────────────────────────────────────
+# Sidebar Filters 
 
 st.sidebar.header("🔍 Filters")
 
@@ -69,7 +69,7 @@ else:
     season_months = None
 
 
-# ─── Load & Filter Work-Orders ──────────────────────────────────────────────
+# Load & Filter Work-Orders 
 
 @st.cache_data
 def load_and_filter_orders(years, months, season):
@@ -89,7 +89,7 @@ def load_and_filter_orders(years, months, season):
 df = load_and_filter_orders(selected_years, selected_months, season_months)
 
 
-# ─── Load Building Footprints ───────────────────────────────────────────────
+# Load Building Footprints
 
 @st.cache_data
 def load_buildings():
@@ -102,7 +102,7 @@ def load_buildings():
 gdf = load_buildings()
 
 
-# ─── Aggregate by Craft ─────────────────────────────────────────────────────
+# Aggregate by Craft 
 
 grouped = (
     df.groupby("FAC_ID")["CRAFT"]
@@ -111,7 +111,7 @@ grouped = (
 )
 
 
-# ─── Pie‐Chart Renderer ──────────────────────────────────────────────────────
+# Pie‐Chart Renderer 
 
 def make_pie_datauri(counts):
     fig, ax = plt.subplots(figsize=(2, 2))
@@ -138,7 +138,7 @@ def make_pie_datauri(counts):
     return f"data:image/png;base64,{data}"
 
 
-# ─── Tooltip HTML with Swatches & 2-Column Legend ───────────────────────────
+#  Tooltip HTML 
 
 def build_tooltip_html(row):
     name = row["Sheet3__Common_Name"]
@@ -182,7 +182,7 @@ def build_tooltip_html(row):
 gdf["tooltip_html"] = gdf.apply(build_tooltip_html, axis=1)
 
 
-# ─── Render Map ─────────────────────────────────────────────────────────────
+# Render Map 
 
 MAP_CENTER = [33.7756, -84.3963]
 view_state = pdk.ViewState(
@@ -214,6 +214,7 @@ deck = pdk.Deck(
 
 st.write("Hover over a building to see its pie-chart and legend.")
 st.pydeck_chart(deck)
+
 
 
 
