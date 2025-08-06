@@ -7,10 +7,12 @@ from io import BytesIO
 import base64
 from difflib import get_close_matches
 
-# ── Configuration ────────────────────────────────────────────────────────────
+# ── Page config ──────────────────────────────────────────────────────────────
 
 st.set_page_config(page_title="Map of Campus and building work-orders", layout="wide")
 st.title("Map of Campus and building work-orders")
+
+# ── Constants ─────────────────────────────────────────────────────────────────
 
 CRAFT_COLORS = {
     "HVAC":              "#1f77b4",
@@ -32,37 +34,40 @@ SEASON_MONTHS = {
 
 PCT_ON_SLICE = 5.0
 
-# ── Sidebar Overrides & Filters ───────────────────────────────────────────────
+# ── Manual Overrides ──────────────────────────────────────────────────────────
 
-st.sidebar.header("🔍 Filters")
-
-# Manual overrides for the handful of name mismatches you patch by hand:
+# Upper-cased & stripped keys → exact geojson name
 MANUAL_OVERRIDES = {
     "COC":               "COLLEGE OF COMPUTING",
     "COLL OF COMPUTI":   "COLLEGE OF COMPUTING",
-    # …add any new ones here…
+    # …add more as you discover them…
 }
 
-# ── Helpers to get year/month bounds without filtering down to zero rows ───────
+# ── Helpers for Slider Bounds ─────────────────────────────────────────────────
 
 @st.cache_data
 def load_year_bounds(path):
-    tmp = pd.read_csv(path, parse_dates=["WORKDATE"], usecols=["WORKDATE"])
-    yrs = tmp["WORKDATE"].dt.year
-    return int(yrs.min()), int(yrs.max())
+    df = pd.read_csv(path, parse_dates=["WORKDATE"], usecols=["WORKDATE"])
+    years = df["WORKDATE"].dt.year.dropna()
+    return int(years.min()), int(years.max())
 
 @st.cache_data
 def load_month_bounds(path):
-    tmp = pd.read_csv(path, parse_dates=["WORKDATE"], usecols=["WORKDATE"])
-    mths = tmp["WORKDATE"].dt.month
-    return int(mths.min()), int(mths.max())
+    df = pd.read_csv(path, parse_dates=["WORKDATE"], usecols=["WORKDATE"])
+    months = df["WORKDATE"].dt.month.dropna()
+    return int(months.min()), int(months.max())
 
-# Get sliders
+# ── Build Sidebar Controls ───────────────────────────────────────────────────
+
+st.sidebar.header("🔍 Filters")
+
+# Year slider (guaranteed no NaN)
 min_year, max_year = load_year_bounds("DF_WO_GaTech.csv")
 selected_years = st.sidebar.slider(
     "Year range", min_year, max_year, (min_year, max_year)
 )
 
+# Month-range slider (optional)
 filter_months = st.sidebar.checkbox("Filter by month-range", False)
 if filter_months:
     mn, mx = load_month_bounds("DF_WO_GaTech.csv")
@@ -70,14 +75,15 @@ if filter_months:
 else:
     selected_months = (None, None)
 
+# Season filter
 filter_season = st.sidebar.checkbox("Filter by season", False)
-selected_season = (
-    st.sidebar.selectbox("Season", list(SEASON_MONTHS))
-    if filter_season else None
-)
-season_months = SEASON_MONTHS[selected_season] if selected_season else None
+if filter_season:
+    selected_season = st.sidebar.selectbox("Season", list(SEASON_MONTHS))
+    season_months = SEASON_MONTHS[selected_season]
+else:
+    season_months = None
 
-# ── Load & Filter Work-Orders ────────────────────────────────────────────────
+# ── Load & Filter Work-Orders ─────────────────────────────────────────────────
 
 @st.cache_data
 def load_and_filter_orders(path, years, months, season):
@@ -85,7 +91,7 @@ def load_and_filter_orders(path, years, months, season):
     df["year"]      = df["WORKDATE"].dt.year
     df["month"]     = df["WORKDATE"].dt.month
     df["FAC_ID_UP"] = df["FAC_ID"].astype(str).str.upper().str.strip()
-    # apply your manual fixes
+    # apply manual fixes
     df["FAC_ID_MAPPED"] = df["FAC_ID_UP"].replace(MANUAL_OVERRIDES)
 
     mask = df["year"].between(*years)
@@ -93,6 +99,7 @@ def load_and_filter_orders(path, years, months, season):
         mask &= df["month"].between(*months)
     if season is not None:
         mask &= df["month"].isin(season)
+
     return df.loc[mask]
 
 df = load_and_filter_orders(
@@ -102,7 +109,7 @@ df = load_and_filter_orders(
     season_months
 )
 
-# ── Load Building Footprints ─────────────────────────────────────────────────
+# ── Load Building Footprints ──────────────────────────────────────────────────
 
 @st.cache_data
 def load_buildings(path):
@@ -140,52 +147,44 @@ grouped = (
       .unstack(fill_value=0)
 )
 
-# ── Pie‐Chart Renderer ────────────────────────────────────────────────────────
+# ── Pie-Chart Renderer & Tooltip HTML ────────────────────────────────────────
 
 def make_pie_datauri(counts):
-    fig, ax = plt.subplots(figsize=(2, 2))
-    colors = [CRAFT_COLORS.get(c, "#CCCCCC") for c in counts.index]
+    fig, ax = plt.subplots(figsize=(2,2))
+    colors  = [CRAFT_COLORS.get(c, "#CCCCCC") for c in counts.index]
     autopct = lambda p: f"{p:.0f}%" if p >= PCT_ON_SLICE else ""
     ax.pie(counts, labels=None, autopct=autopct,
            startangle=90, colors=colors,
-           wedgeprops={"edgecolor": "white"})
+           wedgeprops={"edgecolor":"white"})
     ax.axis("equal")
-
-    buf = BytesIO()
-    fig.savefig(buf, format="png", bbox_inches="tight", transparent=True)
-    plt.close(fig)
-    buf.seek(0)
+    buf = BytesIO(); fig.savefig(buf, format="png", bbox_inches="tight", transparent=True)
+    plt.close(fig); buf.seek(0)
     data = base64.b64encode(buf.read()).decode()
     return f"data:image/png;base64,{data}"
-
-# ── Tooltip HTML ─────────────────────────────────────────────────────────────
 
 def build_tooltip_html(row):
     name = row["Sheet3__Common_Name"]
     if name in grouped.index:
         raw    = grouped.loc[name]
-        counts = raw[raw > 0]
-        pct    = counts.div(counts.sum()) * 100
+        counts = raw[raw>0]
+        pct    = counts.div(counts.sum())*100
         uri    = make_pie_datauri(counts)
-
-        lines = []
+        lines  = []
         for craft, p in zip(counts.index, pct):
             col = CRAFT_COLORS.get(craft, "#CCCCCC")
             swatch = (
-                f"<span style='display:inline-block;"
-                f"width:12px; height:12px; background:{col};"
+                f"<span style='display:inline-block; "
+                f"width:12px; height:12px; background:{col}; "
                 f"margin-right:4px; vertical-align:middle'></span>"
             )
             lines.append(f"{swatch}{craft}: {p:.1f}%")
-
         legend = "<br>".join(lines)
         return (
             "<div style='text-align:center;'>"
               f"<strong>{name}</strong><br>"
               f"<img src='{uri}' width='120px'><br>"
               "<div style='text-align:left; font-size:0.9em; "
-                         "column-count:2; column-gap:12px; "
-                         "margin-top:4px;'>"
+                         "column-count:2; column-gap:12px; margin-top:4px;'>"
                 f"{legend}"
               "</div>"
             "</div>"
@@ -200,19 +199,14 @@ def build_tooltip_html(row):
 
 gdf["tooltip_html"] = gdf.apply(build_tooltip_html, axis=1)
 
-# ── Render Map ───────────────────────────────────────────────────────────────
+# ── Render the Map ────────────────────────────────────────────────────────────
 
 MAP_CENTER = [33.7756, -84.3963]
-view_state = pdk.ViewState(
-    latitude=MAP_CENTER[0], longitude=MAP_CENTER[1],
-    zoom=16, pitch=0
-)
+view_state = pdk.ViewState(latitude=MAP_CENTER[0], longitude=MAP_CENTER[1], zoom=16, pitch=0)
 
 layer = pdk.Layer(
-    "GeoJsonLayer", data=gdf, pickable=True, stroked=True,
-    filled=True, extruded=False,
-    get_fill_color=[50, 100, 200, 80],
-    get_line_color=[255, 255, 255, 200],
+    "GeoJsonLayer", data=gdf, pickable=True, stroked=True, filled=True,
+    extruded=False, get_fill_color=[50,100,200,80], get_line_color=[255,255,255,200]
 )
 
 deck = pdk.Deck(
@@ -220,7 +214,7 @@ deck = pdk.Deck(
     initial_view_state=view_state,
     tooltip={
         "html": "{tooltip_html}",
-        "style": {"backgroundColor": "rgba(0,0,0,0.8)", "color": "white"}
+        "style": {"backgroundColor":"rgba(0,0,0,0.8)","color":"white"}
     }
 )
 
