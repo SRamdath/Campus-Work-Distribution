@@ -188,7 +188,7 @@ MAP_CENTER = [33.7756, -84.3963]
 view_state = pdk.ViewState(
     latitude=MAP_CENTER[0],
     longitude=MAP_CENTER[1],
-    zoom=16,
+    zoom=15,
     pitch=0
 )
 
@@ -213,7 +213,7 @@ deck = pdk.Deck(
 )
 
 st.write("Hover over a building to see its pie-chart and legend.")
-st.pydeck_chart(deck)
+st.pydeck_chart(deck, use_container_width=True, height=600)
 
 
 
